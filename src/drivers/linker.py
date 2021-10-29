@@ -4,6 +4,7 @@ import re
 import os
 import string
 from collections import defaultdict
+from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
 from elftools.common.exceptions import ELFError
@@ -195,6 +196,12 @@ parser.add_argument('--scan-libraries-for-sm',
                     'libraries that are given as a full path (-l:/path/to/file.a). '
                     'As such, it does not scan -lm style libraries unnecessarily.',
                     action='store_true')
+parser.add_argument('--sm-config-file',
+                    help='Use a config file for SMs to specify which asm stubs to use.'
+                        'This is useful if multiple SMs have different roles (e.g. Scheduler and '
+                        'normal modules. This is also useful if one wants to use different stubs '
+                        'than the ones provided by the scheduler. See sm-config-example.yaml for documentation.',
+                        type=Path)
 
 args, cli_ld_args = parser.parse_known_args()
 set_args(args)
@@ -789,10 +796,8 @@ for sm in sms:
     io_connections = ''
     nonce = ''
 
-    if hasattr(sm_config[sm], "num_connections"):
-        sm_num_connections = sm_config[sm].num_connections
-    else:
-        sm_num_connections = 0
+    # quick patch (not really important)
+    sm_num_connections = 8
 
     if len(ios) > 0:
         # make sure we allocate space even if num_connections is zero
