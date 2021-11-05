@@ -15,6 +15,7 @@ from common import *
 
 MAC_SIZE = int(sancus.config.SECURITY / 8)
 KEY_SIZE = MAC_SIZE
+CONNECTION_STRUCT_SIZE = 6 + KEY_SIZE
 
 
 class SmEntry:
@@ -61,7 +62,7 @@ def add_sym(file, sym_map):
 
     args += [file, file]
     call_prog('msp430-elf-objcopy', args)
-    return file 
+    return file
 
 
 def parse_size(val):
@@ -90,18 +91,23 @@ def get_symbol(elf_file, name):
 
 def get_io_sym_map(sm_name):
     sym_map = {
-        '__sm_handle_input':    '__sm_{}_handle_input'.format(sm_name),
-        '__sm_num_inputs':      '__sm_{}_num_inputs'.format(sm_name),
-        '__sm_num_connections': '__sm_{}_num_connections'.format(sm_name),
-        '__sm_io_keys':         '__sm_{}_io_keys'.format(sm_name),
-        '__sm_input_callbacks': '__sm_{}_input_callbacks'.format(sm_name),
-        '__sm_output_nonce':    '__sm_{}_output_nonce'.format(sm_name),
-        '__sm_send_output':     '__sm_{}_send_output'.format(sm_name),
-        '__sm_set_key':         '__sm_{}_set_key'.format(sm_name),
-        '__sm_X_exit':          '__sm_{}_exit'.format(sm_name),
-        '__sm_X_stub_malloc':   '__sm_{}_stub_malloc'.format(sm_name),
+        '__sm_handle_input':        '__sm_{}_handle_input'.format(sm_name),
+        '__sm_num_inputs':          '__sm_{}_num_inputs'.format(sm_name),
+        '__sm_num_connections':     '__sm_{}_num_connections'.format(sm_name),
+        '__sm_max_connections':     '__sm_{}_max_connections'.format(sm_name),
+        '__sm_io_connections':      '__sm_{}_io_connections'.format(sm_name),
+        '__sm_input_callbacks':     '__sm_{}_input_callbacks'.format(sm_name),
+        '__sm_send_output':         '__sm_{}_send_output'.format(sm_name),
+        '__sm_set_key':             '__sm_{}_set_key'.format(sm_name),
+        '__sm_attest':              '__sm_{}_attest'.format(sm_name),
+        '__sm_X_exit':              '__sm_{}_exit'.format(sm_name),
+        '__sm_X_stub_malloc':       '__sm_{}_stub_malloc'.format(sm_name),
         '__sm_X_stub_reactive_handle_output':
-            '__sm_{}_stub_reactive_handle_output'.format(sm_name)
+            '__sm_{}_stub_reactive_handle_output'.format(sm_name),
+        '__sm_X_public_start':      '__sm_{}_public_start'.format(sm_name),
+        '__sm_X_public_end':        '__sm_{}_public_end'.format(sm_name),
+        '__sm_X_secret_start':      '__sm_{}_secret_start'.format(sm_name),
+        '__sm_X_secret_end':        '__sm_{}_secret_end'.format(sm_name)
     }
 
     return sym_map
@@ -113,7 +119,7 @@ def get_io_sect_map(sm_name):
         '.rela.sm.X.text':  '.rela.sm.{}.text'.format(sm_name),
     }
 
-    for entry in ('__sm{}_set_key', '__sm{}_handle_input'):
+    for entry in ('__sm{}_set_key', '__sm{}_attest', '__sm{}_handle_input'):
         map['.sm.X.{}.table'.format(entry.format(''))] = \
             '.sm.{}.{}.table'.format(sm_name, entry.format('_' + sm_name))
         map['.rela.sm.X.{}.table'.format(entry.format(''))] = \
@@ -134,15 +140,19 @@ def create_io_stub(sm, stub):
 
 
 def sort_entries(entries):
-    # If the set_key entry exists, it should have index 0 and if the
-    # handle_input entry exists, it should have index 1. This is accomplished by
-    # mapping those entries to __ and ___ respectively since those come
+    # If the set_key entry exists, it should have index 0, if the
+    # attest entry exists, it should have index 1 and if
+    # handle_input entry exists, it should have index 2. This is accomplished by
+    # mapping those entries to __, ___ and ___ respectively since those come
     # alphabetically before any valid entry name.
     def sort_key(entry):
         if re.match(r'__sm_\w+_set_key', entry.name):
             return '__'
-        if re.match(r'__sm_\w+_handle_input', entry.name):
+        if re.match(r'__sm_\w+_attest', entry.name):
             return '___'
+        if re.match(r'__sm_\w+_handle_input', entry.name):
+            return '____'
+
         return entry.name
 
     entries.sort(key=sort_key)
@@ -199,7 +209,7 @@ if args.scan_libraries_for_sm:
     for a in archive_files:
         debug("Unpacking archive for Sancus SM inspection: " + a)
         file_name = a
-        if ':' in a: 
+        if ':' in a:
             # support calls such as -lib:/full/path
             file_name = file_name.split(':')[1]
 
@@ -256,6 +266,7 @@ existing_macs = []
 elf_relocations = defaultdict(list)
 
 added_set_key_stub = False
+added_attest_stub = False
 added_input_stub = False
 added_output_stub = False
 
@@ -395,6 +406,14 @@ while i < len(input_files_to_scan):
                         # And register it to also be scanned by this loop later
                         input_files_to_scan.append(generated_file)
                         added_set_key_stub = True
+
+                    if not added_attest_stub:
+                        # Generate the attest stub file
+                        generated_file = create_io_stub(sm, 'sm_attest.o')
+                        generated_object_files.append(generated_file)
+                        # And register it to also be scanned by this loop later
+                        input_files_to_scan.append(generated_file)
+                        added_attest_stub = True
 
                     if which == 'input':
                         dest = sms_inputs
@@ -740,32 +759,45 @@ for sm in sms:
 
         call_prog('msp430-gcc', ['-c', '-o', o_file, c_file])
 
-        input_callbacks += '    {}(.sm.{}.callbacks)\n'.format(o_file, sm)
+        input_callbacks += '    KEEP({}(.sm.{}.callbacks))\n'.format(o_file, sm)
         input_callbacks += '    . = ALIGN(2);'
 
-    # Table of connection keys
-    io_keys = ''
+    """
+    Table of connections: in a reactive application, a connection links the
+    output of a SM (defined using the macro `SM_OUTPUT`) to the input of another
+    (defined using the macro `SM_INPUT`).
+    These connections are stored in a `Connection` array on each SM (see
+    `reactive_stubs_support.h`). The array is allocated here with a fixed size,
+    according to the `num_connections` parameter in the SM config (default 0).
+    """
+
+    num_connections = ''
+    io_connections = ''
+
+    if hasattr(sm_config[sm], "num_connections"):
+        sm_num_connections = sm_config[sm].num_connections
+    else:
+        sm_num_connections = 0
 
     if len(ios) > 0:
-        io_keys += '__sm_{}_io_keys = .;\n'.format(sm)
-        io_keys += '    . += {};\n'.format(len(ios) * KEY_SIZE)
-        io_keys += '    . = ALIGN(2);'
+        # make sure we allocate space even if num_connections is zero
+        io_connections_size = max(sm_num_connections * CONNECTION_STRUCT_SIZE, 2)
 
-    # Nonce used by outputs
-    outputs_nonce = ''
-
-    if len(outputs) > 0:
-        outputs_nonce += '__sm_{}_output_nonce = .;\n'.format(sm)
-        outputs_nonce += '    . += 2;\n'
-        outputs_nonce += '    . = ALIGN(2);'
+        num_connections += '__sm_{}_num_connections = .;\n'.format(sm)
+        num_connections += '    . += 2;\n'
+        num_connections += '    . = ALIGN(2);'
+        io_connections += '__sm_{}_io_connections = .;\n'.format(sm)
+        io_connections += '    . += {};\n'.format(io_connections_size)
+        io_connections += '    . = ALIGN(2);'
 
     text_sections.append(text_section.format(sm, entry_file, isr_file,
                                              exit_file, '\n    '.join(tables),
                                              input_callbacks,
                                              '\n    '.join(extra_labels)))
+
     data_sections.append(data_section.format(sm, '\n    '.join(id_syms),
-                                             args.sm_stack_size, io_keys,
-                                             outputs_nonce))
+                                             args.sm_stack_size, num_connections,
+                                             io_connections))
 
     if sm in sms_entries:
         num_entries = len(sms_entries[sm])
@@ -782,7 +814,7 @@ for sm in sms:
         symbols.append('__sm_{}_io_{}_idx = {};'.format(sm, io, index))
 
     # Add symbols for the number of connections/inputs
-    symbols.append('__sm_{}_num_connections = {};'.format(sm, len(ios)))
+    symbols.append('__sm_{}_max_connections = {};'.format(sm, sm_num_connections))
     symbols.append('__sm_{}_num_inputs = {};'.format(sm, len(inputs)))
 
     if args.prepare_for_sm_text_section_wrapping:
