@@ -94,12 +94,14 @@ def get_io_sym_map(sm_name):
         '__sm_handle_input':        '__sm_{}_handle_input'.format(sm_name),
         '__sm_num_inputs':          '__sm_{}_num_inputs'.format(sm_name),
         '__sm_num_connections':     '__sm_{}_num_connections'.format(sm_name),
+        '__sm_nonce':               '__sm_{}_nonce'.format(sm_name),
         '__sm_max_connections':     '__sm_{}_max_connections'.format(sm_name),
         '__sm_io_connections':      '__sm_{}_io_connections'.format(sm_name),
         '__sm_input_callbacks':     '__sm_{}_input_callbacks'.format(sm_name),
         '__sm_send_output':         '__sm_{}_send_output'.format(sm_name),
         '__sm_set_key':             '__sm_{}_set_key'.format(sm_name),
         '__sm_attest':              '__sm_{}_attest'.format(sm_name),
+        '__sm_disable':             '__sm_{}_disable'.format(sm_name),
         '__sm_X_exit':              '__sm_{}_exit'.format(sm_name),
         '__sm_X_stub_malloc':       '__sm_{}_stub_malloc'.format(sm_name),
         '__sm_X_stub_reactive_handle_output':
@@ -119,7 +121,7 @@ def get_io_sect_map(sm_name):
         '.rela.sm.X.text':  '.rela.sm.{}.text'.format(sm_name),
     }
 
-    for entry in ('__sm{}_set_key', '__sm{}_attest', '__sm{}_handle_input'):
+    for entry in ('__sm{}_set_key', '__sm{}_attest', '__sm{}_disable', '__sm{}_handle_input'):
         map['.sm.X.{}.table'.format(entry.format(''))] = \
             '.sm.{}.{}.table'.format(sm_name, entry.format('_' + sm_name))
         map['.rela.sm.X.{}.table'.format(entry.format(''))] = \
@@ -150,8 +152,10 @@ def sort_entries(entries):
             return '__'
         if re.match(r'__sm_\w+_attest', entry.name):
             return '___'
-        if re.match(r'__sm_\w+_handle_input', entry.name):
+        if re.match(r'__sm_\w+_disable', entry.name):
             return '____'
+        if re.match(r'__sm_\w+_handle_input', entry.name):
+            return '_____'
 
         return entry.name
 
@@ -267,6 +271,7 @@ elf_relocations = defaultdict(list)
 
 added_set_key_stub = False
 added_attest_stub = False
+added_disable_stub = False
 added_input_stub = False
 added_output_stub = False
 
@@ -414,6 +419,14 @@ while i < len(input_files_to_scan):
                         # And register it to also be scanned by this loop later
                         input_files_to_scan.append(generated_file)
                         added_attest_stub = True
+
+                    if not added_disable_stub:
+                        # Generate the exit_module stub file
+                        generated_file = create_io_stub(sm, 'sm_disable.o')
+                        generated_object_files.append(generated_file)
+                        # And register it to also be scanned by this loop later
+                        input_files_to_scan.append(generated_file)
+                        added_disable_stub = True
 
                     if which == 'input':
                         dest = sms_inputs
@@ -631,6 +644,7 @@ data_section = '''. = ALIGN(2);
     . = ALIGN(2);
     {3}
     {4}
+    {5}
     __sm_{0}_sp_addr = .;          /* make sure this is the last address in data
                                   section, as HW IRQ logic will store SP here */
     . += 2;
@@ -773,6 +787,7 @@ for sm in sms:
 
     num_connections = ''
     io_connections = ''
+    nonce = ''
 
     if hasattr(sm_config[sm], "num_connections"):
         sm_num_connections = sm_config[sm].num_connections
@@ -789,6 +804,9 @@ for sm in sms:
         io_connections += '__sm_{}_io_connections = .;\n'.format(sm)
         io_connections += '    . += {};\n'.format(io_connections_size)
         io_connections += '    . = ALIGN(2);'
+        nonce += '__sm_{}_nonce = .;\n'.format(sm)
+        nonce += '    . += 2;\n'
+        nonce += '    . = ALIGN(2);'
 
     text_sections.append(text_section.format(sm, entry_file, isr_file,
                                              exit_file, '\n    '.join(tables),
@@ -797,7 +815,7 @@ for sm in sms:
 
     data_sections.append(data_section.format(sm, '\n    '.join(id_syms),
                                              args.sm_stack_size, num_connections,
-                                             io_connections))
+                                             io_connections, nonce))
 
     if sm in sms_entries:
         num_entries = len(sms_entries[sm])

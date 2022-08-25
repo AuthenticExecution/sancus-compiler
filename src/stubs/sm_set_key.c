@@ -17,24 +17,35 @@ uint16_t SM_ENTRY(SM_NAME) __sm_set_key(const uint8_t* ad, const uint8_t* cipher
     io_index io_id = (ad[2] << 8) | ad[3];
     uint16_t nonce = (ad[4] << 8) | ad[5];
 
-    // check if there is still space left in the array
-    if (__sm_num_connections == SM_MAX_CONNECTIONS) {
-      return InternalError;
-    }
-
     // check nonce
-    if(nonce != __sm_num_connections) {
+    if(nonce != __sm_nonce) {
       return MalformedPayload;
     }
 
-    Connection *conn = &__sm_io_connections[__sm_num_connections];
-    *conn_idx = __sm_num_connections;
+    Connection *conn = NULL;
+    uint16_t num_c = __sm_num_connections;
+
+    if(*conn_idx < __sm_num_connections &&
+        __sm_io_connections[*conn_idx].conn_id == conn_id) {
+      // replace an existing connection
+      conn = &__sm_io_connections[*conn_idx];
+    } 
+    else if(__sm_num_connections < SM_MAX_CONNECTIONS) {
+      // use new connection 
+      *conn_idx = num_c;
+      conn = &__sm_io_connections[num_c++];
+    } 
+    else {
+      return InternalError;
+    }
 
     if (!sancus_unwrap(ad, AD_SIZE, cipher, SANCUS_KEY_SIZE, tag, conn->key)) {
       return CryptoError;
     }
 
-    __sm_num_connections++;
+    __sm_nonce++;
+    __sm_num_connections = num_c;
+
     conn->io_id = io_id;
     conn->conn_id = conn_id;
     conn->nonce = 0;

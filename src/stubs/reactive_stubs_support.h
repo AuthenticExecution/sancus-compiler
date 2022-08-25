@@ -42,6 +42,7 @@ extern char __sm_max_connections;
 #define SM_MAX_CONNECTIONS (size_t)&__sm_max_connections
 
 extern uint16_t __sm_num_connections;
+extern uint16_t __sm_nonce;
 
 extern char __sm_num_inputs;
 #define SM_NUM_INPUTS (size_t)&__sm_num_inputs
