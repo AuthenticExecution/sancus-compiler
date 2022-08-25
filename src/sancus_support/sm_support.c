@@ -28,3 +28,29 @@ sm_id sancus_enable(struct SancusModule* sm)
     return sancus_enable_wrapped(sm, 0, NULL);
 }
 
+int is_buffer_outside_region(void *start_p, void *end_p,
+    void *buf_p, size_t len) {
+  uintptr_t start = (uintptr_t) start_p;
+  uintptr_t end   = (uintptr_t) end_p;
+  uintptr_t buf   = (uintptr_t) buf_p;
+  uintptr_t buf_end;
+  
+  // make sure start < end, otherwise return false
+  if (start >= end) {
+    return 0;
+  }
+
+  if(len > 0) {
+    buf_end = buf + len - 1;
+  }
+  else {
+    buf_end = buf;
+  }
+
+  /* check for int overflow and finally validate `buf` falls outside */ 
+  if( (buf <= buf_end) && ((end <= buf) || (start > buf_end))) {
+    return 1;
+  }
+
+  return 0;
+}

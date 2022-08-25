@@ -201,6 +201,12 @@ extern char __unprotected_sp;
 #endif
 
 /*
+ * Returns true if buf is outside the memory region [start, end)
+ * if start >= end, immediately return false
+ */
+int is_buffer_outside_region(void *start_p, void *end_p, void *buf_p, size_t len);
+
+/*
  * Returns true iff whole buffer [p,p+len-1] is outside of the sm SancusModule
  */
 #define sancus_is_outside_sm(sm, p, len) \
@@ -308,37 +314,6 @@ sm_id sancus_enable_wrapped(struct SancusModule* sm, unsigned nonce, void* tag);
 
 #undef always_inline
 #define always_inline static inline __attribute__((always_inline))
-
-/*
- * Returns true if buf is outside the memory region [start, end)
- * if start >= end, immediately return false
- */
-always_inline int is_buffer_outside_region(void *start_p, void *end_p,
-    void *buf_p, size_t len) {
-  uintptr_t start = (uintptr_t) start_p;
-  uintptr_t end   = (uintptr_t) end_p;
-  uintptr_t buf   = (uintptr_t) buf_p;
-  uintptr_t buf_end;
-  
-  // make sure start < end, otherwise return false
-  if (start >= end) {
-    return 0;
-  }
-
-  if(len > 0) {
-    buf_end = buf + len - 1;
-  }
-  else {
-    buf_end = buf;
-  }
-
-  /* check for int overflow and finally validate `buf` falls outside */ 
-  if( (buf <= buf_end) && ((end <= buf) || (start > buf_end))) {
-    return 1;
-  }
-
-  return 0;
-}
 
 /**
  * Disable the protection of the calling module.
